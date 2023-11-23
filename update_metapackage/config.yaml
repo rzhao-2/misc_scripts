@@ -1,0 +1,13 @@
+max_threads: 64
+viral_protein_faa_reps: /mnt/hpccs01/work/microbiome/msingle/rossenzhao/ictv-imgvr/proteins
+viral_genome_fna_reps: /mnt/hpccs01/work/microbiome/msingle/rossenzhao/ictv-imgvr/ictv-transcripts
+viral_tax: /mnt/hpccs01/work/microbiome/msingle/rossenzhao/ictv-imgvr/taxonomy.tsv
+gtdb_protein_faa_reps: /work/microbiome/db/gtdb/gtdb_release214/genomic_files_reps/protein_faa_reps
+gtdb_bac_tax: /work/microbiome/db/gtdb/gtdb_release214/bac120_taxonomy_r214.tsv
+gtdb_arc_tax: /work/microbiome/db/gtdb/gtdb_release214/ar53_taxonomy_r214.tsv
+uniprot_seqs: /work/microbiome/abisko/aroneys/uniprot/uniref100_20210616/uniprot_sprot.fa
+uniprot_tax: /work/microbiome/abisko/aroneys/uniprot/uniref100_20210616/uniprot_sprot_taxonomy.tsv
+output_dir: /mnt/hpccs01/work/microbiome/msingle/rossenzhao/snaketest
+metapackage: /mnt/hpccs01/work/microbiome/msingle/rossenzhao/vog-imgvr-metapackage-v0.5
+output_metapackage: vog_metapackage_0.6
+hmms_and_names: hmms_and_names.tsv

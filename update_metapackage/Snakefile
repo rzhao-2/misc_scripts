@@ -1,0 +1,451 @@
+#############
+### Setup ###
+#############
+"""
+Steps:
+Create and activate base environment (update_metapackage.yml)
+Update config.yaml
+Run `snakemake --cores 64 --use-conda --scheduler greedy`
+"""
+
+import pandas as pd
+import os
+import shutil
+
+configfile: "config.yaml"
+# hmms_and_names = pd.read_csv('hmms_and_names.tsv', sep="\t").set_index("name", drop=False)
+output_dir = config["output_dir"]
+logs_dir = output_dir + "/logs"
+
+# concatenate hmms into a single hmm file
+hmm_file = output_dir + "/all_hmms.hmm"
+if not os.path.exists(hmm_file):
+    with open(hmm_file, "w") as outfile:
+        print("Concatenating hmms into a single file")
+        for hmm in hmms_and_names["hmm_filepath"]:
+            with open(hmm, "r") as infile:
+                outfile.write(infile.read())
+
+# find ~/m/db/gtdb/gtdb_release214/genomic_files_reps/protein_faa_reps -name '*.faa' >gtdb_protein_faa_reps.txt
+gtdb_faa_list = [f.strip() for f in open('gtdb_protein_faa_reps.txt')]
+viral_faa_list = [f.strip() for f in open('viral_protein_faa_reps.txt')]
+
+gtdb_proviruses = 'proviruses.tsv'
+gtdb_refseq_to_assembly = 'assembly_to_refseq.txt'
+
+# hmm_dir = "/mnt/hpccs01/work/microbiome/msingle/rossenzhao/vogdb211/hmms/"
+
+if not os.path.exists(output_dir):
+    os.mkdir(output_dir)
+# if not os.path.exists(output_dir):
+#     shutil.mkdir(output_dir)
+logs_dir = os.path.join(output_dir, "logs")
+
+
+if not "max_threads" in config:
+    config["max_threads"] = 32
+
+rule all:
+    input:
+        output_dir + '/metapackage/' + config["output_metapackage"]
+
+####################
+### HMM searches ###
+####################
+rule hmmsearch_viral:
+    input:
+        hmm = hmm_file,
+        genome_proteins = "viral_protein_faa_reps.txt"
+    output:
+        touch = output_dir + "/hmmsearch_viral.done"
+    params:
+        output_dir = output_dir + "/hmmsearch_viral",
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/hmmsearch.log"
+    conda:
+        "envs/hmmsearch.yml"
+    script:
+        "scripts/hmmsearch.py"
+
+rule get_matches_viral:
+    input:
+        touch = output_dir + "/hmmsearch_viral.done"
+    output:
+        touch = output_dir + "/get_matches_viral.done"
+    params:
+        genomes = viral_faa_list,
+        proviruses = False,
+        hmms_and_names = config["hmms_and_names"],
+        hmmsearch_directory = output_dir + "/hmmsearch_viral",
+        output_dir = output_dir + "/get_matches_viral",
+        logs_dir = logs_dir + "/get_matches_viral"
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/get_matches_viral.log"
+    conda:
+        "envs/get_matches.yml"
+    script:
+        "scripts/get_matches_all.py"
+
+rule hmmsearch_microbial:
+    input:
+        hmm = hmm_file,
+        genome_proteins = "gtdb_protein_faa_reps.txt"
+    output:
+        touch = output_dir + "/hmmsearch_microbial.done"
+    params:
+        output_dir = output_dir + "/hmmsearch_microbial",
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/hmmsearch_microbial.log"
+    conda:
+        "envs/hmmsearch.yml"
+    script:
+        "scripts/hmmsearch.py"
+
+rule get_matches_microbial:
+    input:
+        touch = output_dir + "/hmmsearch_microbial.done"
+    output:
+        touch = output_dir + "/get_matches_microbial.done"
+    params:
+        genomes = gtdb_faa_list,
+        proviruses = gtdb_proviruses,
+        hmms_and_names = config["hmms_and_names"],
+        hmmsearch_directory = output_dir + "/hmmsearch_microbial/",
+        output_dir = output_dir + "/get_matches_microbial",
+        logs_dir = logs_dir + "/get_matches_microbial",
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/get_matches_microbial.log"
+    conda:
+        "envs/get_matches.yml"
+    script:
+        "scripts/get_matches_all.py"
+
+rule hmmsearch_uniprot:
+    input:
+        hmm = hmm_file,
+        uniprot_file = config["uniprot_seqs"]
+    output:
+        done = output_dir + "/hmmsearch_uniprot.done"
+    params:
+        output_dir = output_dir + "/hmmsearch_uniprot",
+        outfile = output_dir + "/hmmsearch_uniprot/hmmsearch_uniprot.txt"
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/hmmsearch_uniprot.log"
+    conda:
+        "envs/hmmsearch.yml"
+    shell:
+        "mkdir {params.output_dir} | hmmsearch -E 0.00001 --cpu {threads} --tblout {params.outfile} {input.hmm} {input.uniprot_file} &> {log} && touch {output.done}"
+
+rule get_matches_uniprot:
+    input:
+        touch = output_dir + "/hmmsearch_uniprot.done"
+    output:
+        touch = output_dir + "/get_matches_uniprot.done"
+    params:
+        hmmsearch_directory = output_dir + "/hmmsearch_uniprot",
+        proviruses = False,
+        hmms_and_names = config["hmms_and_names"],
+        output_dir = output_dir + "/get_matches_uniprot",
+        logs_dir = logs_dir + "/get_matches_uniprot",
+        # outfile = output_dir + "/get_matches_uniprot/uniprot_matches.tsv"
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/get_matches_uniprot.log"
+    conda:
+        "envs/get_matches.yml"
+    script:
+        "scripts/get_matches_all.py"
+
+rule mfqe_viral:
+    input:
+        touch = output_dir + "/get_matches_viral.done"
+    output:
+        touch = output_dir + "/mfqe_viral.done"
+    params:
+        protein_filepaths = "viral_protein_faa_reps.txt",
+        match_directory = output_dir + "/get_matches_viral",
+        output_dir = output_dir + "/mfqe_viral",
+        log = logs_dir + "/mfqe_viral",
+    threads: int(config["max_threads"]/4)
+    log:
+        logs_dir + "/mfqe_viral.log"
+    conda:
+        "envs/singlem.yml"
+    script:
+        "scripts/mfqe_all.py"
+
+rule mfqe_microbial:
+    input:
+        touch = output_dir + "/get_matches_microbial.done",
+    output:
+        touch = output_dir + "/mfqe_microbial.done",
+    params:
+        protein_filepaths = "gtdb_protein_faa_reps.txt",
+        match_directory = output_dir + "/get_matches_microbial",
+        output_dir = output_dir + "/mfqe_microbial",
+        log = logs_dir + "/mfqe_microbial",
+    threads: int(config["max_threads"]/4)
+    log:
+        logs_dir + "/mfqe_microbial.log"
+    conda:
+        "envs/singlem.yml"
+    script:
+        "scripts/mfqe_all.py"
+
+rule mfqe_uniprot:
+    input:
+        touch = output_dir + "/get_matches_uniprot.done",
+    output:
+        done = output_dir + "/mfqe_uniprot.done",
+    params:
+        uniprot_seqs = config["uniprot_seqs"],
+        match_file = output_dir + "/get_matches_uniprot/hmmsearch_uniprot.tsv",
+        output_dir = output_dir + "/mfqe_uniprot",
+        output_file = output_dir + "/mfqe_uniprot/uniprot_matches.faa",
+    log:
+        logs_dir + "/mfqe_euks.log"
+    conda:
+        "envs/singlem.yml"
+    shell:
+        "mkdir {params.output_dir} | cut -f1 {params.match_file} | mfqe --input-fasta {params.uniprot_seqs} --sequence-name-lists /dev/stdin --output-fasta-files {params.output_file} --output-uncompressed &> {log}; touch {output.done}"
+
+########################
+### Package creation ###
+########################
+#TODO: deal with sequence hits across multiple hmms
+rule transpose_hmms_with_viral:
+    input:
+        done = output_dir + "/mfqe_viral.done",
+    output:
+        done = output_dir + "/transpose_hmms_with_viral.done",
+    params:
+        output_dir = directory(output_dir + "/hmmseq/viral"),
+        hmms_and_names = config["hmms_and_names"],
+        matches_dir = output_dir + "/get_matches_viral",
+        mfqe_dir = output_dir + "/mfqe_viral",
+        protein_filepaths = "viral_protein_faa_reps.txt",
+        taxfiles = [config["viral_tax"]],
+        logs_dir = logs_dir + "/transpose_hmms_with_viral",
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/transpose_hmms_with_viral.log"
+    conda:
+        "envs/transpose_hmms_with_sequences.yml"
+    script:
+        "scripts/transpose_hmms_with_sequences_all.py"
+
+rule transpose_hmms_with_microbial:
+    input:
+        done = output_dir + "/mfqe_microbial.done"
+    output:
+        done = output_dir + "/transpose_hmms_with_microbial.done",
+    params:
+        output_dir = directory(output_dir + "/hmmseq/microbial"),
+        hmms_and_names = config["hmms_and_names"],
+        matches_dir = output_dir + "/get_matches_microbial",
+        mfqe_dir = output_dir + "/mfqe_microbial",
+        protein_filepaths = "gtdb_protein_faa_reps.txt",
+        taxfiles = [config["gtdb_bac_tax"], config["gtdb_arc_tax"]],
+        logs_dir = logs_dir + "/transpose_hmms_with_microbial",
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/transpose_hmms_with_microbial.log"
+    conda:
+        "envs/transpose_hmms_with_sequences.yml"
+    script:
+        "scripts/transpose_hmms_with_sequences_all.py"
+
+rule transpose_hmms_with_uniprot:
+    input:
+        done = output_dir + "/mfqe_uniprot.done"
+    output:
+        done = output_dir + "/transpose_hmms_with_uniprot.done",
+    params:
+        output_dir = directory(output_dir + "/hmmseq/uniprot"),
+        hmms_and_names = config["hmms_and_names"],
+        matches = output_dir + "/get_matches_uniprot/hmmsearch_uniprot.tsv",
+        matched_seqs = output_dir + "/mfqe_uniprot/uniprot_matches.faa",
+        taxfile = [config["uniprot_tax"]]
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/transpose_hmms_with_uniprot.log"
+    conda:
+        "envs/transpose_hmms_with_sequences.yml"
+    shell:
+        "mkdir -p {params.output_dir} | python scripts/transpose_hmms_with_sequences.py --input-fasta {params.matched_seqs} --taxonomy {params.taxfile} --hmm-seq {params.matches} --hmm-spkg {params.hmms_and_names} --output {params.output_dir} && touch {output.done}"
+    
+rule concatenate_seqs_and_taxonomies_viral:
+    input:
+        done = output_dir + "/transpose_hmms_with_viral.done",
+    output:
+        done = output_dir + "/concatenate_seqs.{spkg}.done",
+    params:
+        hmmseq_dir = output_dir + "/hmmseq/viral",
+        concat_dir = output_dir + "/hmmseq_concat/viral",
+        spkg_seq = output_dir + "hmmseq_concat/viral/{spkg}.faa",
+        spkg_tax = output_dir + "hmmseq_concat/viral/{spkg}_taxonomy.tsv",
+    shell:
+        "mkdir -p {params.concat_dir} && find {params.hmmseq_dir} |grep -F {wildcards.spkg} |grep .faa$ |parallel -j1 --ungroup cat {{}} > {params.spkg_seq} && find {params.hmmseq_dir} |grep -F {wildcards.spkg} |grep _taxonomy.tsv$ |parallel -j1 --ungroup cat {{}} > {params.spkg_tax}; touch {output.done}"
+
+rule concatenate_seqs_and_taxonomies_off_target: # concatenate both microbial and uniprot together
+    input:
+        microbial_done = output_dir + "/transpose_hmms_with_microbial.done",
+        uniprot_done = output_dir + "/transpose_hmms_with_uniprot.done",
+    output:
+        done = output_dir + "/concatenate_seqs_off_target.{spkg}.done",
+    params:
+        hmmseq_dir_microbial = output_dir + "/hmmseq/microbial",
+        hmmseq_dir_uniprot = output_dir + "/hmmseq/uniprot",
+        concat_dir_off_target = output_dir + "/hmmseq_concat/off_target",
+        spkg_seq = output_dir + "hmmseq_concat/off_target/{spkg}.faa",
+        spkg_tax = output_dir + "hmmseq_concat/off_target/{spkg}_taxonomy.tsv",
+    shell:
+        "mkdir -p {params.concat_dir_off_target} && find {params.hmmseq_dir_microbial} |"
+        "grep -F {wildcards.spkg} |"
+        "grep .faa$ |"
+        "parallel -j1 --ungroup cat {{}} > {params.spkg_seq} && "
+        "find {params.hmmseq_dir_microbial} |"
+        "grep -F {wildcards.spkg} |"
+        "grep _taxonomy.tsv$ "
+        "|parallel -j1 --ungroup cat {{}} > {params.spkg_tax} && "
+        "find {params.hmmseq_dir_uniprot} |grep -F {wildcards.spkg} |grep .faa$ |parallel -j1 --ungroup cat {{}} >> {params.spkg_seq} && find {params.hmmseq_dir_uniprot} |grep -F {wildcards.spkg} |grep _taxonomy.tsv$ |parallel -j1 --ungroup cat {{}} >> {params.spkg_tax}; touch {output.done}"
+
+rule create_Lyrebird_packages: # create individual packages
+    input:
+        output_dir + "/concatenate_seqs.{spkg}.done",
+        output_dir + "/concatenate_seqs_off_target.{spkg}.done",
+    output:
+        directory(output_dir + "/packages/{spkg}.spkg")
+    params:
+        hmms_and_names = hmms_and_names,
+        spkg = config["output_metapackage"] + "/{spkg}.spkg",
+        spkg_seq = output_dir + "hmmseq_concat/viral/{spkg}.faa",
+        spkg_tax = output_dir + "hmmseq_concat/viral/{spkg}_taxonomy.tsv",
+        spkg_seq_off_target = output_dir + "hmmseq_concat/off_target/{spkg}.faa",
+        spkg_tax_off_target = output_dir + "hmmseq_concat/off_target/{spkg}_taxonomy.tsv",
+        spkg_name = lambda wildcards: hmms_and_names.loc[wildcards.spkg, "name"],
+    log:
+        logs_dir + "/packages/{spkg}.log"
+    conda:
+        "envs/singlem.yml"
+    shell:
+        "singlem regenerate "
+        "--input-singlem-package {params.spkg} "
+        "--input-sequences {params.spkg_seq} "
+        "--input-taxonomy {params.spkg_tax} "
+        "--euk-sequences {params.spkg_seq_off_target} "
+        "--euk-taxonomy {params.spkg_tax_off_target} "
+        "--output-singlem-package {output} "
+        "--sequence-prefix {params.spkg_name}~ "
+        "&> {log}"
+
+############################
+### Metapackage creation ###
+############################
+rule create_draft_Lyrebird_metapackage:
+    input:
+        packages = expand(output_dir + "/packages/{spkg}.spkg", spkg = hmms_and_names.index),
+    output:
+        directory(output_dir + "/draft_metapackage.smpkg")
+    threads:
+        config["max_threads"]
+    log:
+        logs_dir + "/draft_metapackage.log"
+    conda:
+        "envs/singlem.yml"
+    shell:
+        "singlem metapackage "
+        "--singlem-packages {input.packages} "
+        "--no-nucleotide-sdb "
+        "--no-taxon-genome-lengths "
+        "--metapackage {output} "
+        "--threads {threads} "
+        "&> {log}"
+
+#TODO: check for sequences that hit multiple hmms
+
+# ensure to only run on ictv transcripts
+rule Lyrebird_transcripts:
+    input:
+        dir = config["viral_genome_fna_reps"],
+        metapackage = output_dir + "/draft_metapackage.smpkg",
+    output:
+        dir = directory(output_dir + "/transcripts"),
+        touch = output_dir + "/transcripts.done"
+    params:
+        logs = logs_dir + "/transcripts",
+    conda:
+        "envs/singlem.yml"
+    threads:
+        config["max_threads"]
+    shell:
+        "mkdir -p {params.logs} "
+        "&& cat <( find {input.dir} -name '*.fna' ) "
+        "| parallel --eta -j {threads} "
+        "singlem pipe "
+        "--forward {{}} "
+        "--metapackage {input.metapackage} "
+        "--otu-table {output.dir}/{{/.}}.otu_table.tsv "
+        "--no-assign-taxonomy "
+        "'&>' {params.logs}/{{/.}}.log; "
+        "touch {output.touch}"
+
+rule assign_taxonomy:
+    input:
+        touch = output_dir + "/transcripts.done"
+    output:
+        output_dir + "/assign_taxonomy/transcripts.otu_table.tsv"
+    params:
+        input_dir = output_dir + "/transcripts",
+        viral_taxonomy = config["viral_tax"],
+    conda:
+        "envs/singlem.yml"
+    script:
+        "scripts/assign_viral_taxonomy.py"
+
+rule make_sdb:
+    input:
+        output_dir + "/assign_taxonomy/transcripts.otu_table.tsv"
+    output:
+        directory(output_dir + "/taxonomy/transcripts.sdb")
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/taxonomy/makedb.log"
+    conda:
+        "envs/singlem.yml"
+    shell:
+        "singlem makedb "
+        "--otu-table {input} "
+        "--db {output} "
+        "--threads {threads} "
+        "&> {log}"
+
+rule create_Lyrebird_metapackage:
+    input:
+        packages = expand(output_dir + "/packages/{spkg}.spkg", spkg = hmms_and_names.index),
+        sdb = output_dir + "/taxonomy/transcripts.sdb",
+    output:
+        directory(output_dir + "/metapackage/" + config["output_metapackage"])
+    threads:
+        config["max_threads"]
+    log:
+        logs_dir + "/metapackage.log"
+    conda:
+        "envs/singlem.yml"
+    shell:
+        "singlem metapackage "
+        "--singlem-packages {input.packages} "
+        "--nucleotide-sdb {input.sdb} "
+        "--no-taxon-genome-lengths "
+        "--metapackage {output} "
+        "--threads {threads} "
+        "&> {log}"
+
+###########################
+### Metapackage testing ###
+###########################

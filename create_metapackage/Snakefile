@@ -1,0 +1,224 @@
+# WORK IN PROGRESS
+
+#############
+### Setup ###
+#############
+"""
+Steps:
+Create and activate base environment (update_metapackage.yml)
+Update config.yaml
+Run `snakemake --cores 64 --use-conda --scheduler greedy`
+"""
+
+# import pandas as pd
+import os
+import shutil
+
+configfile: "config.yaml"
+output_dir = config["output_dir"]
+logs_dir = output_dir + "/logs"
+
+# concatenate hmms into a single hmm file - recommend preselecting for single copy marker genes with high coverage if possible
+hmm_file = output_dir + "/all_hmms.hmm"
+if not os.path.exists(hmm_file):
+    with open(hmm_file, "w") as outfile:
+        print("Concatenating hmms into a single file")
+        for hmm in hmms_and_names["hmm_filepath"]:
+            with open(hmm, "r") as infile:
+                outfile.write(infile.read())
+
+# find ~/m/db/gtdb/gtdb_release214/genomic_files_reps/protein_faa_reps -name '*.faa' >gtdb_protein_faa_reps.txt
+gtdb_faa_list = [f.strip() for f in open('gtdb_protein_faa_reps.txt')]
+viral_faa_list = [f.strip() for f in open('viral_protein_faa_reps.txt')]
+
+gtdb_proviruses = 'gtdb_proviruses_r214.tsv'
+gtdb_refseq_to_assembly = 'assembly_to_refseq.txt'
+
+if not os.path.exists(output_dir):
+    os.mkdir(output_dir)
+# if not os.path.exists(output_dir):
+#     shutil.mkdir(output_dir)
+logs_dir = os.path.join(output_dir, "logs")
+
+if not "max_threads" in config:
+    config["max_threads"] = 32
+
+rule all:
+    input:
+        output_dir + '/metapackage/' + config["output_metapackage"]
+
+###################################
+# Initial GraftM package creation #
+###################################
+rule hmmsearch_viral:
+    input:
+        hmm = hmm_file,
+        genome_proteins = "viral_protein_faa_reps.txt"
+    output:
+        touch = output_dir + "/hmmsearch_viral.done"
+    params:
+        output_dir = output_dir + "/hmmsearch_viral",
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/hmmsearch.log"
+    conda:
+        "envs/hmmsearch.yml"
+    script:
+        "scripts/hmmsearch.py"
+
+rule get_matches_viral:
+    input:
+        touch = output_dir + "/hmmsearch_viral.done"
+    output:
+        touch = output_dir + "/get_matches_viral.done"
+    params:
+        genomes = viral_faa_list,
+        proviruses = False,
+        hmms_and_names = config["hmms_and_names"],
+        hmmsearch_directory = output_dir + "/hmmsearch_viral",
+        output_dir = output_dir + "/get_matches_viral",
+        logs_dir = logs_dir + "/get_matches_viral"
+    threads: config["max_threads"]
+    log:
+        logs_dir + "/get_matches_viral.log"
+    conda:
+        "envs/get_matches.yml"
+    script:
+        "scripts/get_matches_all.py"
+
+# rule mfqe_viral
+
+# rule transpose_hmms_viral:
+
+# rule graftm_create
+
+
+##########################
+# SingleM window finding #
+##########################
+# rule graftm_search_and_align:
+
+# rule singlem_seqs:
+
+# make_initial_spkgs:
+
+
+##################
+# spkg selection #
+##################
+# rule get_domain_coverages:
+
+# rule roundrobin:
+
+################################
+# Acquire off-target sequences #
+################################
+# rule hmmsearch_off_target:
+
+# rule get_matches_off_target:
+
+# rule mfqe:
+
+# rule transpose_hmms_with_offtarget
+
+# rule singlem_regenerate:
+
+
+########################
+# Metapackage creation #
+########################
+# rule create_draft_metapackage:
+#     input:
+#         packages = expand(output_dir + "/packages/{spkg}.spkg", spkg = hmms_and_names.index),
+#     output:
+#         directory(output_dir + "/draft_metapackage.smpkg")
+#     threads:
+#         config["max_threads"]
+#     log:
+#         logs_dir + "/draft_metapackage.log"
+#     conda:
+#         "envs/singlem.yml"
+#     shell:
+#         "singlem metapackage "
+#         "--singlem-packages {input.packages} "
+#         "--no-nucleotide-sdb "
+#         "--no-taxon-genome-lengths "
+#         "--metapackage {output} "
+#         "--threads {threads} "
+#         "&> {log}"
+
+# rule Lyrebird_transcripts:
+#     input:
+#         dir = config["viral_genome_fna_reps"],
+#         metapackage = output_dir + "/draft_metapackage.smpkg",
+#     output:
+#         dir = directory(output_dir + "/transcripts"),
+#         touch = output_dir + "/transcripts.done"
+#     params:
+#         logs = logs_dir + "/transcripts",
+#     conda:
+#         "envs/singlem.yml"
+#     threads:
+#         config["max_threads"]
+#     shell:
+#         "mkdir -p {params.logs} "
+#         "&& cat <( find {input.dir} -name '*.fna' ) "
+#         "| parallel --eta -j {threads} "
+#         "singlem pipe "
+#         "--forward {{}} "
+#         "--metapackage {input.metapackage} "
+#         "--otu-table {output.dir}/{{/.}}.otu_table.tsv "
+#         "--no-assign-taxonomy "
+#         "'&>' {params.logs}/{{/.}}.log; "
+#         "touch {output.touch}"
+
+# rule assign_taxonomy:
+#     input:
+#         touch = output_dir + "/transcripts.done"
+#     output:
+#         output_dir + "/assign_taxonomy/transcripts.otu_table.tsv"
+#     params:
+#         input_dir = output_dir + "/transcripts",
+#         viral_taxonomy = config["viral_tax"],
+#     conda:
+#         "envs/singlem.yml"
+#     script:
+#         "scripts/assign_viral_taxonomy.py"
+
+# rule make_sdb:
+#     input:
+#         output_dir + "/assign_taxonomy/transcripts.otu_table.tsv"
+#     output:
+#         directory(output_dir + "/taxonomy/transcripts.sdb")
+#     threads: config["max_threads"]
+#     log:
+#         logs_dir + "/taxonomy/makedb.log"
+#     conda:
+#         "envs/singlem.yml"
+#     shell:
+#         "singlem makedb "
+#         "--otu-table {input} "
+#         "--db {output} "
+#         "--threads {threads} "
+#         "&> {log}"
+
+# rule create_Lyrebird_metapackage:
+#     input:
+#         packages = expand(output_dir + "/packages/{spkg}.spkg", spkg = hmms_and_names.index),
+#         sdb = output_dir + "/taxonomy/transcripts.sdb",
+#     output:
+#         directory(output_dir + "/metapackage/" + config["output_metapackage"])
+#     threads:
+#         config["max_threads"]
+#     log:
+#         logs_dir + "/metapackage.log"
+#     conda:
+#         "envs/singlem.yml"
+#     shell:
+#         "singlem metapackage "
+#         "--singlem-packages {input.packages} "
+#         "--nucleotide-sdb {input.sdb} "
+#         "--no-taxon-genome-lengths "
+#         "--metapackage {output} "
+#         "--threads {threads} "
+#         "&> {log}"
